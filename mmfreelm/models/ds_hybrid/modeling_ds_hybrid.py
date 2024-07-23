@@ -98,7 +98,7 @@ class DSHybridMoEBlock(nn.Module):
         return final_hidden_states, router_logits
 
 class DSHybridAttentionDecoderLayer(nn.Module):
-    def __init__(self, config: DSHybridBitConfig, layer_idx: int):
+    def __init__(self, config: DSHybridConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
 
@@ -173,7 +173,7 @@ class DSHybridAttentionDecoderLayer(nn.Module):
         return outputs
 
 class DSHybridBitDecoderLayer(nn.Module):
-    def __init__(self, config: DSHybridBitConfig, layer_idx: int):
+    def __init__(self, config: DSHybridConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
 
@@ -231,7 +231,7 @@ class DSHybridBitDecoderLayer(nn.Module):
 
 class DSHybridBitPreTrainedModel(PreTrainedModel):
 
-    config_class = DSHybridBitConfig
+    config_class = DSHybridConfig
     supports_gradient_checkpointing = True
     _no_split_modules = ['DSHybridBitBlock']
 

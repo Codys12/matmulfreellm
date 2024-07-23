@@ -33,7 +33,6 @@ class DSHybridBitMLP(nn.Module):
     def __init__(
         self,
         config: DSHybridConfig,
-        hidden_act: str = 'swish'
     ) -> DSHybridBitMLP:
         super().__init__()
 
@@ -62,7 +61,7 @@ class DSHybridBitMLP(nn.Module):
         return z
 
 class DSHybridMoEBlock(nn.Module):
-    def __init__(self, DSHybridConfig):
+    def __init__(self, config:DSHybridConfig):
         super().__init__()
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.intermediate_size

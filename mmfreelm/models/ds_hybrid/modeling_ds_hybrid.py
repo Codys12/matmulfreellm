@@ -46,7 +46,7 @@ class DSHybridBitMLP(nn.Module):
         
         self.intermediate_size = config.intermediate_size
         if config.intermediate_size is None:
-            intermediate_size = int(hidden_size * hidden_ratio * 2 / 3)
+            intermediate_size = int(self.hidden_size * self.hidden_ratio * 2 / 3)
             self.intermediate_size = 256 * ((intermediate_size + 256 - 1) // 256)
 
         self.gate_proj = BitLinear(self.hidden_size, self.intermediate_size * 2, bias=False)

@@ -32,21 +32,22 @@ class DSHybridBitMLP(nn.Module):
 
     def __init__(
         self,
-        config: DSHybridConfig,
-    ) -> DSHybridBitMLP:
+        config: DSHybridConfig
+    ):
         super().__init__()
 
-        self.hidden_size = config.hidden_size
+        hidden_size = config.hidden_size
         # the final number of params is `hidden_ratio * hidden_size^2`
         # `intermediate_size` is chosen to be a multiple of 256 closest to `2/3 * hidden_size * hidden_ratio`
-        self.hidden_ratio = config.hidden_ratio
-        if config.hidden_ratio is None:
-            self.hidden_ratio = 4
+        hidden_ratio = config.hidden_ratio if config.hidden_ratio is not None else 4
         
         self.intermediate_size = config.intermediate_size
         if config.intermediate_size is None:
-            intermediate_size = int(self.hidden_size * self.hidden_ratio * 2 / 3)
+            intermediate_size = int(hidden_size * hidden_ratio * 2 / 3)
             self.intermediate_size = 256 * ((intermediate_size + 256 - 1) // 256)
+        
+        self.hidden_size = hidden_size
+        self.hidden_ratio = hidden_ratio
 
         self.gate_proj = BitLinear(self.hidden_size, self.intermediate_size * 2, bias=False)
         #self.gate_proj_bit = RMSNormLinear(self.hidden_size)
@@ -402,7 +403,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
-        self.model = DSHybridBitModel(config)
+        self.model = DSHybridModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = BitLinear(config.hidden_size, config.vocab_size, bias=False)
 

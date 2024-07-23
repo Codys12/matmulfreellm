@@ -1,3 +1,7 @@
+from typing import Optional
+
+from transformers.configuration_utils import PretrainedConfig
+
 class DSHybridConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`DSHybridModel`]. It is used to instantiate an

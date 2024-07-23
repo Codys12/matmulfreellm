@@ -275,7 +275,7 @@ ALL_DECODER_LAYER_TYPES = {"attention": DSHybridAttentionDecoderLayer, "hgrn": D
 
 class DSHybridModel(DSHybridBitPreTrainedModel):
 
-    def __init__(self, config: DSHybridBitConfig):
+    def __init__(self, config: DSHybridConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size

@@ -399,7 +399,7 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
         )
 
 
-class DSHybridForCausalLM(DSHybridPreTrainedModel):
+class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):

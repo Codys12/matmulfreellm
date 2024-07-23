@@ -104,6 +104,7 @@ class DSHybridConfig(PretrainedConfig):
         eos_token_id=2,
         tie_word_embeddings=False,
         attn_mode="fused_recurrent",
+        num_heads: Optional[int] = 1,
         expand_ratio=1,
         hidden_ratio=4,
         use_short_conv=False,
@@ -137,6 +138,7 @@ class DSHybridConfig(PretrainedConfig):
         self.rms_norm_eps = rms_norm_eps
         self.use_cache = use_cache
         self.attn_mode = attn_mode
+        self.num_heads = num_heads
         self.expand_ratio = expand_ratio
         self.hidden_ratio = hidden_ratio
         self.use_short_conv = use_short_conv

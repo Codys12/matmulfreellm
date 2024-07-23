@@ -32,23 +32,22 @@ class DSHybridBitMLP(nn.Module):
 
     def __init__(
         self,
-        hidden_size: int,
-        hidden_ratio: Optional[int] = None,
-        intermediate_size: Optional[int] = None,
+        config: DSHybridConfig,
         hidden_act: str = 'swish'
     ) -> DSHybridBitMLP:
         super().__init__()
 
-        self.hidden_size = hidden_size
+        self.hidden_size = config.hidden_size
         # the final number of params is `hidden_ratio * hidden_size^2`
         # `intermediate_size` is chosen to be a multiple of 256 closest to `2/3 * hidden_size * hidden_ratio`
-        if hidden_ratio is None:
-            hidden_ratio = 4
-        if intermediate_size is None:
+        self.hidden_ratio = config.hidden_ratio
+        if config.hidden_ratio is None:
+            self.hidden_ratio = 4
+        
+        self.intermediate_size = config.intermediate_size
+        if config.intermediate_size is None:
             intermediate_size = int(hidden_size * hidden_ratio * 2 / 3)
-            intermediate_size = 256 * ((intermediate_size + 256 - 1) // 256)
-        self.hidden_ratio = hidden_ratio
-        self.intermediate_size = intermediate_size
+            self.intermediate_size = 256 * ((intermediate_size + 256 - 1) // 256)
 
         self.gate_proj = BitLinear(self.hidden_size, self.intermediate_size * 2, bias=False)
         #self.gate_proj_bit = RMSNormLinear(self.hidden_size)

@@ -334,6 +334,7 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
 
         if use_cache:
             if past_key_values is None:
+                pass
                 past_key_values = [layer.attn.init_state(batch_size) for layer in self.layers]
             if not isinstance(past_key_values, RecurrentCache):
                 past_key_values = RecurrentCache.from_legacy_cache(past_key_values)

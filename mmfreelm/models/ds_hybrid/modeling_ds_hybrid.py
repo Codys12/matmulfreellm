@@ -202,8 +202,8 @@ class DSHybridBitDecoderLayer(nn.Module):
         past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
-        output_router_logits: Optional[bool] = False,
         lower_bound: Optional[torch.Tensor] = None,
+        output_router_logits: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
         hidden_states = self.attn_norm(hidden_states)
@@ -309,6 +309,7 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = None,
         return_dict: Optional[bool] = None
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         if output_attentions:
@@ -366,7 +367,8 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
                     past_key_values,
                     use_cache,
                     output_attentions,
-                    lower_bound
+                    lower_bound,
+                    output_router_logits
                 )
             else:
                 layer_outputs = layer(
@@ -376,6 +378,7 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                     lower_bound=lower_bound
+                    output_router_logits=output_router_logits
                 )
 
             # if output_attentions:
@@ -386,6 +389,10 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
+
+        if output_router_logits:
+            router_logits = layer_outputs[3]
+            all_hidden_states += (router_logits,)
 
         next_cache = None
         if use_cache:

@@ -53,7 +53,7 @@ class DSHybridBitMLP(nn.Module):
         #self.gate_proj_bit = RMSNormLinear(self.hidden_size)
         self.down_proj = BitLinear(self.intermediate_size, self.hidden_size, bias=False)
         #self.gate_proj_bit = RMSNormLinear(self.hidden_size)
-        self.act_fn = ACT2FN[hidden_act]
+        self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
         y = self.gate_proj(x)

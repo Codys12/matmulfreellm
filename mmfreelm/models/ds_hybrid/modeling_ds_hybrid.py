@@ -132,6 +132,7 @@ class DSHybridAttentionDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         output_router_logits: Optional[bool] = False,
         lower_bound: Optional[torch.Tensor] = None,
+        output_attention_logits: Optional[bool] = False
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
         hidden_states = self.attn_norm(hidden_states)

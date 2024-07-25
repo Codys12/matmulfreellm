@@ -586,8 +586,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         if output_router_logits:
             aux_loss = load_balancing_loss_func(
                 outputs.router_logits if return_dict else outputs[-2],
-                self.num_experts,
-                self.num_experts_per_tok,
+                self.config.num_experts,
                 attention_mask,
             )
             if labels is not None:

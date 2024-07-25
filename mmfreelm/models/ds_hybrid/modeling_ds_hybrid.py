@@ -28,6 +28,46 @@ from mmfreelm.ops.fusedbitnet import FusedBitLinear as BitLinear
 logger = logging.get_logger(__name__)
 
 
+
+def load_balancing_loss_func(
+    router_logits: torch.Tensor,
+    num_experts: int,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Computes the Mutual Information (MI) loss for the Mixture of Experts (MoE) model.
+    
+    Args:
+        router_logits (torch.Tensor): Logits from the router, shape [batch_size * sequence_length, num_experts].
+        num_experts (int): Number of experts in the model.
+        attention_mask (Optional[torch.Tensor]): Attention mask, shape [batch_size, sequence_length].
+    
+    Returns:
+        torch.Tensor: The MI loss.
+    """
+    batch_size, sequence_length = attention_mask.shape if attention_mask is not None else (router_logits.shape[0], 1)
+    
+    # Compute expert probabilities
+    expert_probs = F.softmax(router_logits, dim=-1)  # [batch_size * sequence_length, num_experts]
+    
+    # Compute entropy of expert distribution H(e)
+    avg_expert_probs = torch.mean(expert_probs, dim=0)  # [num_experts]
+    entropy = -torch.sum(avg_expert_probs * torch.log(avg_expert_probs + 1e-10))
+    
+    # Compute conditional entropy H(e|X)
+    conditional_entropy = -torch.mean(torch.sum(expert_probs * torch.log(expert_probs + 1e-10), dim=-1))
+    
+    # Compute MI loss
+    mi_loss = -entropy + conditional_entropy
+    
+    if attention_mask is not None:
+        # Apply attention mask
+        mask = attention_mask.view(-1, 1).float()
+        mi_loss = mi_loss * mask
+        mi_loss = torch.sum(mi_loss) / torch.sum(mask)
+    
+    return mi_loss
+
 class DSHybridBitMLP(nn.Module):
 
     def __init__(
@@ -541,6 +581,17 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
             labels = labels.to(logits.device)
             labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
             loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+        
+        aux_loss = None
+        if output_router_logits:
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits if return_dict else outputs[-2],
+                self.num_experts,
+                self.num_experts_per_tok,
+                attention_mask,
+            )
+            if labels is not None:
+                loss += self.router_aux_loss_coef * aux_loss.to(loss.device)  # make sure to reside in the same device
 
         if not return_dict:
             output = (logits,) + outputs[1:]

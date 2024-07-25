@@ -11,11 +11,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from transformers.activations import ACT2FN
-from transformers.modeling_outputs import (BaseModelOutputWithPast,
-                                           CausalLMOutputWithPast)
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 
+from mmfreelm.models.ds_hybrid.modeling_outputs import (
+    DSHybridModelOutputWithPast, DSHybridCausalLMOutputWithPast)
 from mmfreelm.layers.hgrn_bit import HGRNBitAttention
 from mmfreelm.models.ds_hybrid.configuration_ds_hybrid import DSHybridConfig
 from mmfreelm.models.utils import RecurrentCache
@@ -130,8 +130,8 @@ class DSHybridAttentionDecoderLayer(nn.Module):
         past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
-        output_router_logits: Optional[bool] = False,
         lower_bound: Optional[torch.Tensor] = None,
+        output_router_logits: Optional[bool] = False,
         output_attention_logits: Optional[bool] = False
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
@@ -153,22 +153,17 @@ class DSHybridAttentionDecoderLayer(nn.Module):
 
         hidden_states, residual = self.mlp_norm(hidden_states, residual, True)
         if isinstance(self.mlp, DSHybridMoEBlock):
-            hidden_states, router_logits = self.mlp(hidden_states)
+            hidden_states, router_logits_output = self.mlp(hidden_states)
+            router_logits = router_logits_output if output_router_logits else None
         else:
             hidden_states = self.mlp(hidden_states)
             router_logits = None
         hidden_states = hidden_states * gate_weights
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states,)
-        if output_attentions:
-            outputs += (None,)  # Placeholder for attentions
-        if use_cache:
-            outputs += (None,)  # Placeholder for past_key_values
-        if output_router_logits:
-            outputs += (router_logits,)
-        if output_attention_logits:
-            outputs += (gate)
+        attention_logits = gate if output_attention_logits else None
+
+        outputs = (hidden_states, attentions, past_key_values, router_logits, attention_logits)
 
         return outputs
 
@@ -204,6 +199,7 @@ class DSHybridBitDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         lower_bound: Optional[torch.Tensor] = None,
         output_router_logits: Optional[bool] = False,
+        output_attention_logits: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
         hidden_states = self.attn_norm(hidden_states)
@@ -216,16 +212,16 @@ class DSHybridBitDecoderLayer(nn.Module):
             lower_bound=lower_bound
         )
         hidden_states, residual = self.mlp_norm(hidden_states, residual, True)
+        router_logits = None
+        attention_logits = None
         if isinstance(self.mlp, DSHybridMoEBlock):
-            hidden_states, router_logits = self.mlp(hidden_states)
+            hidden_states, router_logits_output = self.mlp(hidden_states)
+            router_logits = router_logits_output if output_router_logits else None
         else:
             hidden_states = self.mlp(hidden_states)
-            router_logits = None
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states, attentions, past_key_values)
-        if output_router_logits:
-            outputs += (router_logits,)
+        outputs = (hidden_states, attentions, past_key_values, router_logits, attention_logits)
 
         return outputs
 
@@ -310,15 +306,19 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         output_router_logits: Optional[bool] = None,
+        output_attention_logits: Optional[bool] = None,
         return_dict: Optional[bool] = None
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
+    ) -> Union[Tuple, DSHybridModelOutputWithPast]:
         if output_attentions:
             warnings.warn("`DSHybridBitModel` does not `output_attentions` now, setting it to `False`.")
             output_attentions = False
+        #PARITY HERE
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         use_cache = use_cache if use_cache is not None else (self.config.use_cache if not self.training else False)
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_router_logits = output_router_logits if output_router_logits is not None else self.config.output_router_logits
+        output_attention_logits = output_attention_logits if output_attention_logits is not None else self.config.output_attention_logits
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
@@ -350,6 +350,8 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
 
         all_hidden_states = () if output_hidden_states else None
         all_attns = () if output_attentions else None
+        all_router_logits = () if output_router_logits else None
+        all_attention_logits = () if output_attention_logits else None
 
         if self.config.use_lower_bound:
             lower_bounds = self.lower_bounds.softmax(0)
@@ -368,7 +370,8 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
                     use_cache,
                     output_attentions,
                     lower_bound,
-                    output_router_logits
+                    output_router_logits,
+                    output_attention_logits
                 )
             else:
                 layer_outputs = layer(
@@ -377,12 +380,14 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
                     past_key_values=past_key_values,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
-                    lower_bound=lower_bound
-                    output_router_logits=output_router_logits
+                    lower_bound=lower_bound,
+                    output_router_logits=output_router_logits,
+                    output_attention_logits=output_attention_logits
                 )
 
-            # if output_attentions:
-            #     all_attns += (attentions,)
+            if output_attentions:
+                attns = layer_outputs[1]
+                all_attns += (attns,)
 
         hidden_states = self.norm(layer_outputs[0])
 
@@ -392,18 +397,24 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
 
         if output_router_logits:
             router_logits = layer_outputs[3]
-            all_hidden_states += (router_logits,)
+            all_router_logits += (router_logits,)
+
+        if output_attention_logits:
+            attention_logits = layer_outputs[4]
+            all_attention_logits += (attention_logits,)
 
         next_cache = None
         if use_cache:
             next_cache = past_key_values.to_legacy_cache()
         if not return_dict:
-            return tuple(x for x in [hidden_states, next_cache, all_hidden_states, all_attns] if x is not None)
-        return BaseModelOutputWithPast(
+            return (hidden_states, next_cache, all_hidden_states, all_attns, all_router_logits, all_attention_logits)
+        return DSHybridModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,
             hidden_states=all_hidden_states,
-            attentions=all_attns
+            attentions=all_attns,
+            router_logits=all_router_logits,
+            attention_logits=all_attention_logits
         )
 
 
@@ -492,8 +503,10 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = None,
+        output_attention_logits: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
+    ) -> Union[Tuple, DSHybridCausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -508,6 +521,8 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_router_logits=output_router_logits,
+            output_attention_logits=output_attention_logits,
             return_dict=return_dict
         )
 
@@ -529,7 +544,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
 
-        return CausalLMOutputWithPast(
+        return DSHybridCausalLMOutputWithPast(
             loss=loss,
             logits=logits,
             past_key_values=outputs.past_key_values,

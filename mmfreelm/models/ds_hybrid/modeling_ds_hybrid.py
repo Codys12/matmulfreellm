@@ -30,7 +30,7 @@ logger = logging.get_logger(__name__)
 
 
 def load_balancing_loss_func(
-    router_logits: torch.Tensor,
+    router_logits: Tuple[torch.Tensor, ...],
     num_experts: int,
     attention_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
@@ -38,17 +38,25 @@ def load_balancing_loss_func(
     Computes the Mutual Information (MI) loss for the Mixture of Experts (MoE) model.
     
     Args:
-        router_logits (torch.Tensor): Logits from the router, shape [batch_size * sequence_length, num_experts].
+        router_logits (Tuple[torch.Tensor, ...]): Tuple of logits from the router, 
+                                                  each with shape [batch_size * sequence_length, num_experts].
         num_experts (int): Number of experts in the model.
         attention_mask (Optional[torch.Tensor]): Attention mask, shape [batch_size, sequence_length].
     
     Returns:
         torch.Tensor: The MI loss.
     """
-    batch_size, sequence_length = attention_mask.shape if attention_mask is not None else (router_logits.shape[0], 1)
+    # Concatenate all router logits
+    router_logits = torch.cat(router_logits, dim=0)
+    
+    if attention_mask is not None:
+        batch_size, sequence_length = attention_mask.shape
+    else:
+        batch_size = router_logits.shape[0] // len(router_logits)
+        sequence_length = len(router_logits)
     
     # Compute expert probabilities
-    expert_probs = F.softmax(router_logits, dim=-1)  # [batch_size * sequence_length, num_experts]
+    expert_probs = F.softmax(router_logits, dim=-1)  # [total_tokens, num_experts]
     
     # Compute entropy of expert distribution H(e)
     avg_expert_probs = torch.mean(expert_probs, dim=0)  # [num_experts]
@@ -61,8 +69,8 @@ def load_balancing_loss_func(
     mi_loss = -entropy + conditional_entropy
     
     if attention_mask is not None:
-        # Apply attention mask
-        mask = attention_mask.view(-1, 1).float()
+        # Repeat the attention mask to match the total number of tokens
+        mask = attention_mask.repeat(len(router_logits) // batch_size, 1).view(-1, 1).float()
         mi_loss = mi_loss * mask
         mi_loss = torch.sum(mi_loss) / torch.sum(mask)
     

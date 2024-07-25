@@ -113,7 +113,7 @@ class DSHybridConfig(PretrainedConfig):
         share_conv_kernel=True,
         use_lower_bound=True,
         num_prediction_heads=1,
-        output_attention_logit=True,
+        output_attention_logits=False,
         attention_logit_aux_loss_coef=0.01,
         output_router_logits=False,
         router_aux_loss_coef=0.001,
@@ -148,7 +148,7 @@ class DSHybridConfig(PretrainedConfig):
         self.share_conv_kernel = share_conv_kernel
         self.use_lower_bound = use_lower_bound
         self.num_prediction_heads = num_prediction_heads
-        self.output_attention_logit = output_attention_logit
+        self.output_attention_logits = output_attention_logits
         self.attention_logit_aux_loss_coef = attention_logit_aux_loss_coef
         self.output_router_logits = output_router_logits
         self.router_aux_loss_coef = router_aux_loss_coef

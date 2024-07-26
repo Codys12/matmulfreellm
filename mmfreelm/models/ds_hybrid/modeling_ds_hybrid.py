@@ -467,13 +467,19 @@ class DSHybridModel(DSHybridBitPreTrainedModel):
 
 
 class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = ["lm_heads.0.weight"]  # Only tie the first head
 
     def __init__(self, config):
         super().__init__(config)
         self.model = DSHybridModel(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = BitLinear(config.hidden_size, config.vocab_size, bias=False)
+        self.num_heads = config.num_heads
+        
+        # Create multiple heads
+        self.lm_heads = nn.ModuleList([
+            BitLinear(config.hidden_size, config.vocab_size, bias=False)
+            for _ in range(self.num_heads)
+        ])
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -485,10 +491,10 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         self.model.embeddings = value
 
     def get_output_embeddings(self):
-        return self.lm_head
+        return self.lm_heads[0]  # Return the first head for compatibility
 
     def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
+        self.lm_heads[0] = new_embeddings  # Set only the first head
 
     def set_decoder(self, decoder):
         self.model = decoder
@@ -577,19 +583,38 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         )
 
         hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states)
 
-        loss = None
+        # Prepare loss function
         if labels is not None:
             if self.config.fuse_cross_entropy:
                 loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
             else:
                 loss_fct = nn.CrossEntropyLoss()
-            # Enable model parallelism
-            labels = labels.to(logits.device)
+            labels = labels.to(hidden_states.device)
             labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
-            loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
-        
+
+        total_loss = 0
+        all_logits = []
+
+        for i, head in enumerate(self.lm_heads):
+            # Forward pass for this head
+            logits = head(hidden_states)
+            all_logits.append(logits.detach())  # Store detached logits for later
+
+            if labels is not None:
+                # Compute loss for this head
+                loss = loss_fct(logits.view(-1, self.vocab_size), labels.view(-1))
+                total_loss += loss
+
+                # Backward pass for this head
+                loss.backward(retain_graph=(i < self.num_heads - 1))
+
+                # Clear gradients for the head to save memory
+                head.zero_grad(set_to_none=True)
+
+        # Stack all logits after the loop
+        logits = torch.stack(all_logits, dim=1)
+
         aux_loss = None
         if output_router_logits:
             aux_loss = load_balancing_loss_func(
@@ -598,14 +623,14 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
                 attention_mask,
             )
             if labels is not None:
-                loss += self.config.router_aux_loss_coef * aux_loss.to(loss.device)  # make sure to reside in the same device
+                total_loss += self.config.router_aux_loss_coef * aux_loss.to(total_loss.device)
 
         if not return_dict:
             output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
+            return (total_loss,) + output if total_loss is not None else output
 
         return DSHybridCausalLMOutputWithPast(
-            loss=loss,
+            loss=total_loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,

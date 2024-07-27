@@ -645,7 +645,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
                 head_loss = soft_loss if head_loss is None else head_loss + soft_loss
 
             if head_loss is not None:
-                head_loss.backward()
+                head_loss.backward(retain_graph=True)
 
             all_logits.append(logits.detach())
 

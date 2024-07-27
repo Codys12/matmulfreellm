@@ -647,14 +647,16 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
             all_logits.append(logits.detach())
 
+        grad_output = detached_hidden_states.grad
+
+        dummy = torch.ones(1, requires_grad=True).to(grad_output.device)
         gradients = torch.autograd.grad(outputs=hidden_states, 
                                         inputs=dummy, 
-                                        grad_outputs=detached_hidden_states.grad, 
+                                        grad_outputs=grad_output, 
                                         create_graph=True)
 
         # Create scalar loss
         total_loss = dummy * gradients[0]
-
 
         # Stack all logits after the loop
         logits = torch.stack(all_logits, dim=1)

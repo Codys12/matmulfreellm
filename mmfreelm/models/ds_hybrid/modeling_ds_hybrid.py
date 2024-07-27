@@ -648,8 +648,11 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
             all_logits.append(logits.detach())
 
         grad_output = detached_hidden_states.grad
+        print("GRAD OUTPUT: \n")
         print(grad_output)
         total_loss = torch.sum(hidden_states * grad_output)
+        print("LOSS: \n")
+        print(total_loss)
 
         # Stack all logits after the loop
         logits = torch.stack(all_logits, dim=1)

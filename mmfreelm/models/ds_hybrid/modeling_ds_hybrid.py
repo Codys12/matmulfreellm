@@ -633,20 +633,20 @@ def forward(
 
         if labels is not None or soft_targets is not None:
             # Shift logits and prepare them for loss computation
-            shift_logits = logits[..., :-1, :].contiguous()
+            #shift_logits = logits[..., :-1, :].contiguous()
 
             if labels is not None:
                 # Shift labels to the left
                 shift_labels = labels[..., 1:].contiguous()
                 # Compute hard target loss
-                loss = hard_loss_fct(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
+                loss = hard_loss_fct(logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
                 total_loss += loss
 
             if soft_targets is not None:
                 # Shift soft targets to the left
                 shift_soft_targets = soft_targets[..., 1:, :, :].contiguous()
                 # Compute soft target loss
-                soft_loss = self.distillation_loss(shift_logits, shift_soft_targets)
+                soft_loss = self.distillation_loss(logits, shift_soft_targets)
                 total_loss += soft_loss
 
             # Backward pass for this head

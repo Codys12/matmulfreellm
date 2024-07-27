@@ -578,106 +578,105 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         })
         return model_inputs
 
-def forward(
-    self,
-    input_ids: torch.LongTensor = None,
-    attention_mask: Optional[torch.Tensor] = None,
-    inputs_embeds: Optional[torch.Tensor] = None,
-    past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
-    labels: Optional[torch.LongTensor] = None,
-    soft_targets: Optional[torch.Tensor] = None,
-    use_cache: Optional[bool] = None,
-    output_attentions: Optional[bool] = None,
-    output_hidden_states: Optional[bool] = None,
-    output_router_logits: Optional[bool] = None,
-    output_attention_logits: Optional[bool] = None,
-    return_dict: Optional[bool] = None,
-) -> Union[Tuple, DSHybridCausalLMOutputWithPast]:
-    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-    output_hidden_states = (
-        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-    )
-    output_router_logits = output_router_logits if output_router_logits is not None else self.config.output_router_logits
-    output_attention_logits = output_attention_logits if output_attention_logits is not None else self.config.output_attention_logits
-    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
+        labels: Optional[torch.LongTensor] = None,
+        soft_targets: Optional[torch.Tensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = None,
+        output_attention_logits: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, DSHybridCausalLMOutputWithPast]:
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        output_router_logits = output_router_logits if output_router_logits is not None else self.config.output_router_logits
+        output_attention_logits = output_attention_logits if output_attention_logits is not None else self.config.output_attention_logits
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-    outputs = self.model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        inputs_embeds=inputs_embeds,
-        past_key_values=past_key_values,
-        use_cache=use_cache,
-        output_attentions=output_attentions,
-        output_hidden_states=output_hidden_states,
-        output_router_logits=output_router_logits,
-        output_attention_logits=output_attention_logits,
-        return_dict=return_dict
-    )
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            output_router_logits=output_router_logits,
+            output_attention_logits=output_attention_logits,
+            return_dict=return_dict
+        )
 
-    hidden_states = outputs[0]
+        hidden_states = outputs[0]
+        detached_hidden_states = hidden_states.detach()
+        detached_hidden_states.requires_grad = True
 
-    # Prepare loss functions
-    if labels is not None:
-        if self.config.fuse_cross_entropy:
-            hard_loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
-        else:
-            hard_loss_fct = nn.CrossEntropyLoss()
+        # Prepare loss functions
+        if labels is not None:
+            if self.config.fuse_cross_entropy:
+                hard_loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
+            else:
+                hard_loss_fct = nn.CrossEntropyLoss()
 
-    total_loss = 0
-    all_logits = []
+        total_loss = None
+        all_logits = []
 
-    for i, head in enumerate(self.lm_heads):
-        # Forward pass for this head
-        logits = head(hidden_states)
-        all_logits.append(logits.detach())  # Store detached logits for later
-
-        if labels is not None or soft_targets is not None:
-            # Shift logits and prepare them for loss computation
-            #shift_logits = logits[..., :-1, :].contiguous()
-
+        for i, head in enumerate(self.lm_heads):
+            # Forward pass for this head
+            logits = head(detached_hidden_states)
+            
+            head_loss = None
             if labels is not None:
-                # Shift labels to the left
+                shift_logits = logits[..., :-1, :].contiguous()
                 shift_labels = labels[..., 1:].contiguous()
-                # Compute hard target loss
-                loss = hard_loss_fct(logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
-                total_loss += loss
+                head_loss = hard_loss_fct(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
 
             if soft_targets is not None:
-                # Shift soft targets to the left
+                shift_logits = logits[..., :-1, :].contiguous()
                 shift_soft_targets = soft_targets[..., 1:, :, :].contiguous()
-                # Compute soft target loss
-                soft_loss = self.distillation_loss(logits, shift_soft_targets)
-                total_loss += soft_loss
+                soft_loss = self.distillation_loss(shift_logits, shift_soft_targets)
+                head_loss = soft_loss if head_loss is None else head_loss + soft_loss
 
-            # Backward pass for this head
-            total_loss.backward(retain_graph=(i < self.num_heads - 1))
+            if head_loss is not None:
+                head_loss.backward()
 
-            # Clear gradients for the head to save memory
-            head.zero_grad(set_to_none=True)
+            all_logits.append(logits.detach())
 
-    # Stack all logits after the loop
-    logits = torch.stack(all_logits, dim=1)
+        # Propagate gradients back through the shared layers
+        if detached_hidden_states.grad is not None:
+            hidden_states.backward(detached_hidden_states.grad)
 
-    aux_loss = None
-    if output_router_logits:
-        aux_loss = load_balancing_loss_func(
-            outputs.router_logits if return_dict else outputs[-2],
-            self.config.num_experts,
-            attention_mask,
+        # Stack all logits after the loop
+        logits = torch.stack(all_logits, dim=1)
+
+        aux_loss = None
+        if output_router_logits:
+            aux_loss = load_balancing_loss_func(
+                outputs.router_logits if return_dict else outputs[-2],
+                self.config.num_experts,
+                attention_mask,
+            )
+            if labels is not None or soft_targets is not None:
+                aux_loss = self.config.router_aux_loss_coef * aux_loss
+                aux_loss.backward()
+
+        if not return_dict:
+            output = (logits,) + outputs[1:]
+            return ((total_loss + aux_loss) if total_loss is not None else None,) + output
+
+        return DSHybridCausalLMOutputWithPast(
+            loss=(total_loss + aux_loss) if total_loss is not None else None,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            router_logits=outputs.router_logits,
+            attention_logits=outputs.attention_logits
         )
-        if labels is not None or soft_targets is not None:
-            total_loss += self.config.router_aux_loss_coef * aux_loss.to(total_loss.device)
-
-    if not return_dict:
-        output = (logits,) + outputs[1:]
-        return (total_loss,) + output if total_loss is not None else output
-
-    return DSHybridCausalLMOutputWithPast(
-        loss=total_loss,
-        logits=logits,
-        past_key_values=outputs.past_key_values,
-        hidden_states=outputs.hidden_states,
-        attentions=outputs.attentions,
-        router_logits=outputs.router_logits,
-        attention_logits=outputs.attention_logits
-    )

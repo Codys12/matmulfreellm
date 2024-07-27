@@ -649,9 +649,9 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
             all_logits.append(logits.detach())
 
-        # Propagate gradients back through the shared layers
-        if detached_hidden_states.grad is not None:
-            hidden_states.backward(detached_hidden_states.grad)
+            grad_output = detached_hidden_states.grad
+
+            total_loss = torch.sum(hidden_states * grad_output)
 
         # Stack all logits after the loop
         logits = torch.stack(all_logits, dim=1)
@@ -664,15 +664,14 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
                 attention_mask,
             )
             if labels is not None or soft_targets is not None:
-                aux_loss = self.config.router_aux_loss_coef * aux_loss
-                aux_loss.backward()
+                total_loss += self.config.router_aux_loss_coef * aux_loss
 
         if not return_dict:
             output = (logits,) + outputs[1:]
-            return ((total_loss + aux_loss) if total_loss is not None else None,) + output
+            return (total_loss,) + output if total_loss is not None else output
 
         return DSHybridCausalLMOutputWithPast(
-            loss=(total_loss + aux_loss) if total_loss is not None else None,
+            loss=total_loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,

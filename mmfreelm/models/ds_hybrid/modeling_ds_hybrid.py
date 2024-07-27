@@ -649,7 +649,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
         grad_output = detached_hidden_states.grad
 
-        dummy = torch.ones(1, requires_grad=True)
+        dummy = torch.ones(1, requires_grad=True).to(grad_output.device())
         total_loss = dummy * grad_output
 
 

@@ -653,7 +653,8 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         gradients = torch.autograd.grad(outputs=hidden_states, 
                                         inputs=dummy, 
                                         grad_outputs=grad_output, 
-                                        create_graph=True)
+                                        create_graph=True,
+                                        allow_unused=True)
 
         # Create scalar loss
         total_loss = dummy * gradients[0]

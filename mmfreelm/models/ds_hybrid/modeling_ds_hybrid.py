@@ -592,7 +592,6 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         output_router_logits: Optional[bool] = None,
         output_attention_logits: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        debug: Optional[bool] = None,
     ) -> Union[Tuple, DSHybridCausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -649,8 +648,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
             all_logits.append(logits.detach())
 
         grad_output = detached_hidden_states.grad
-        if debug:
-            print(grad_output)
+        print(grad_output)
         total_loss = torch.sum(hidden_states * grad_output)
 
         # Stack all logits after the loop

@@ -615,8 +615,6 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
         )
 
         hidden_states = outputs[0]
-        detached_hidden_states = hidden_states.detach()
-        detached_hidden_states.requires_grad = True
 
         # Prepare loss functions
         if labels is not None:
@@ -630,7 +628,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
         for i, head in enumerate(self.lm_heads):
             # Forward pass for this head
-            logits = head(detached_hidden_states)
+            logits = head(hidden_states)
             
             head_loss = None
             if labels is not None:
@@ -642,20 +640,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
                 soft_loss = distillation_loss(logits, soft_targets)
                 head_loss = soft_loss if head_loss is None else head_loss + soft_loss
 
-            if head_loss is not None:
-                head_loss.backward(retain_graph=True)
-
-            all_logits.append(logits.detach())
-
-        grad_output = detached_hidden_states.grad
-
-        dummy = torch.ones(1, requires_grad=True).to(grad_output.device)
-
-        # Create scalar loss
-        total_loss = (dummy * grad_output.sum()).sum()
-
-        # Stack all logits after the loop
-        logits = torch.stack(all_logits, dim=1)
+            total_loss = head_loss if total_loss is None else total_loss + head_loss
 
         aux_loss = None
         if output_router_logits:

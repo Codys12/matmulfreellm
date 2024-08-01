@@ -170,7 +170,7 @@ class ModifiedFFF(nn.Module):
 
         if config.depth < 1 or config.hidden_size <= 0 or config.intermediate_size <= 0:
             raise ValueError("input/hidden/output widths must be positive integers and depth must be at least 1")
-        if config.hidden_width % (2**config.depth) != 0:
+        if config.intermediate_size % (2**config.depth) != 0:
             raise ValueError("hidden_width must be divisible by 2**depth")
 
         self.n_leaves = 2 ** config.depth

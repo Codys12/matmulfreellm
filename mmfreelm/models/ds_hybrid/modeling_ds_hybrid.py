@@ -168,12 +168,12 @@ class ModifiedFFF(nn.Module):
         self.activation = ACT2FN[config.hidden_act]
         self.depth = config.depth
 
-        if depth < 1 or input_width <= 0 or hidden_width <= 0 or output_width <= 0:
+        if self.depth < 1 or input_width <= 0 or hidden_width <= 0 or output_width <= 0:
             raise ValueError("input/hidden/output widths must be positive integers and depth must be at least 1")
         if hidden_width % (2**self.depth) != 0:
             raise ValueError("hidden_width must be divisible by 2**depth")
 
-        self.n_leaves = 2 ** depth
+        self.n_leaves = 2 ** self.depth
 
         # First linear layer: input to hidden
         self.layer1 = BitLinear(input_width, hidden_width, bias=False)

@@ -329,7 +329,7 @@ class DSHybridAttentionDecoderLayer(nn.Module):
         num_experts = config.layers_num_experts[layer_idx]
         if num_experts > 1:
             ffn_layer_class = DSHybridMoEBlock
-        else if config.fast_feed_forward:
+        elif config.fast_feed_forward:
             ffn_layer_class = ModifiedFFF
         else:
             ffn_layer_class = DSHybridBitMLP

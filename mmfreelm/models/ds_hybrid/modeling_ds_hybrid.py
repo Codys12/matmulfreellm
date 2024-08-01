@@ -168,9 +168,13 @@ class ModifiedFFF(nn.Module):
         self.activation = ACT2FN[config.hidden_act]
         self.depth = config.depth
 
+        input_width = config.hidden_size
+        output_width = config.hidden_size
+        hidden_width = config.intermediate_size
+
         if config.depth < 1 or config.hidden_size <= 0 or config.intermediate_size <= 0:
             raise ValueError("input/hidden/output widths must be positive integers and depth must be at least 1")
-        if hidden_width % (2**config.depth) != 0:
+        if config.hidden_width % (2**config.depth) != 0:
             raise ValueError("hidden_width must be divisible by 2**depth")
 
         self.n_leaves = 2 ** config.depth

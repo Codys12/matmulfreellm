@@ -168,10 +168,6 @@ class ModifiedFFF(nn.Module):
         self.activation = ACT2FN[config.hidden_act]
         self.depth = config.depth
 
-        input_width = config.hidden_size
-        output_width = config.hidden_size
-        hidden_width = config.intermediate_size
-
         if config.depth < 1 or config.hidden_size <= 0 or config.intermediate_size <= 0:
             raise ValueError("input/hidden/output widths must be positive integers and depth must be at least 1")
         if config.hidden_width % (2**config.depth) != 0:
@@ -180,13 +176,13 @@ class ModifiedFFF(nn.Module):
         self.n_leaves = 2 ** config.depth
 
         # First linear layer: input to hidden
-        self.layer1 = BitLinear(input_width, hidden_width, bias=False)
+        self.layer1 = BitLinear(config.hidden_size, config.intermediate_size, bias=False)
 
         # Second linear layer: hidden to output
-        self.layer2 = BitLinear(hidden_width, output_width, bias=False)
+        self.layer2 = BitLinear(config.intermediate_size, config.hidden_size, bias=False)
 
         # Third linear layer: input to gating
-        self.layer3 = BitLinear(input_width, self.n_leaves - 1, bias=False)
+        self.layer3 = BitLinear(config.hidden_size, self.n_leaves - 1, bias=False)
 
     def create_gating_vector(self, gate_outputs: torch.Tensor) -> torch.Tensor:
         """

@@ -140,6 +140,130 @@ class DSHybridBitMLP(nn.Module):
         z = self.down_proj(swiglu(gate, y))
         return z
 
+class ModifiedFFF(nn.Module):
+    """
+    A modified implementation of fast feedforward networks with 3 linear layers and binary tree gating.
+    """
+    def __init__(self, config: DSHybridConfig):
+        """
+        Initializes a modified fast feedforward network (FFF).
+
+        Parameters
+        ----------
+        input_width : int
+            The width of the input.
+        hidden_width : int
+            The width of the hidden layer.
+        output_width : int
+            The width of the output.
+        depth : int
+            The depth of the FFF tree. Will result in 2**depth leaves.
+        activation : torch.nn.Module, optional
+            The activation function to use. Defaults to `torch.nn.ReLU()`.
+        """
+        super().__init__()
+        self.input_width = config.hidden_size
+        self.hidden_width = config.intermediate_size
+        self.output_width = config.hidden_size
+        self.activation = ACT2FN[config.hidden_act]
+        self.depth = config.depth
+
+        if depth < 1 or input_width <= 0 or hidden_width <= 0 or output_width <= 0:
+            raise ValueError("input/hidden/output widths must be positive integers and depth must be at least 1")
+        if hidden_width % (2**depth) != 0:
+            raise ValueError("hidden_width must be divisible by 2**depth")
+
+        self.n_leaves = 2 ** depth
+
+        # First linear layer: input to hidden
+        self.layer1 = BitLinear(input_width, hidden_width, bias=False)
+
+        # Second linear layer: hidden to output
+        self.layer2 = BitLinear(hidden_width, output_width, bias=False)
+
+        # Third linear layer: input to gating
+        self.layer3 = BitLinear(input_width, self.n_leaves - 1, bias=False)
+
+    def create_gating_vector(self, gate_outputs: torch.Tensor) -> torch.Tensor:
+        """
+        Creates a gating vector using the binary tree structure.
+
+        Parameters
+        ----------
+        gate_outputs : torch.Tensor
+            The output of the gating layer, shape (batch_size, n_nodes)
+            where n_nodes = 2^depth - 1
+
+        Returns
+        -------
+        torch.Tensor
+            The gating vector, shape (batch_size, n_leaves)
+            where n_leaves = 2^depth
+        """
+        batch_size = gate_outputs.shape[0]
+        device = gate_outputs.device
+
+        # Initialize the mixture with ones
+        current_mixture = torch.ones((batch_size, self.n_leaves), device=device)
+
+        for current_depth in range(self.depth):
+            platform = 2**current_depth - 1
+            next_platform = 2**(current_depth + 1) - 1
+            n_nodes = 2**current_depth
+
+            # Get the boundary effect for the current level
+            boundary_effect = torch.sigmoid(gate_outputs[:, platform:next_platform])  # (batch_size, n_nodes)
+            not_boundary_effect = 1 - boundary_effect  # (batch_size, n_nodes)
+
+            # Prepare mixture modifier
+            mixture_modifier = torch.cat(
+                (not_boundary_effect.unsqueeze(-1), boundary_effect.unsqueeze(-1)),
+                dim=-1
+            ).flatten(start_dim=-2, end_dim=-1).unsqueeze(-1)  # (batch_size, n_nodes*2, 1)
+
+            # Apply mixture modifier
+            current_mixture = current_mixture.view(batch_size, 2 * n_nodes, self.n_leaves // (2 * n_nodes))  # (batch_size, 2*n_nodes, n_leaves // (2*n_nodes))
+            current_mixture.mul_(mixture_modifier)  # (batch_size, 2*n_nodes, n_leaves // (2*n_nodes))
+            current_mixture = current_mixture.flatten(start_dim=1, end_dim=2)
+
+        return current_mixture
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the forward pass of this modified FFF.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            The input tensor. Must have shape (..., input_width).
+
+        Returns
+        -------
+        torch.Tensor
+            The output tensor. Will have shape (..., output_width).
+        """
+        original_shape = x.shape
+        x = x.view(-1, x.shape[-1])
+        batch_size = x.shape[0]
+
+        # First layer: input to hidden
+        hidden = self.layer1(x)
+        hidden = self.activation(hidden)
+
+        # Third layer: input to gating
+        gate_outputs = self.layer3(x)
+        gating_vector = self.create_gating_vector(gate_outputs)
+
+        # Apply gating
+        hidden_per_leaf = self.hidden_width // self.n_leaves
+        gating_vector = gating_vector.unsqueeze(2).expand(-1, -1, hidden_per_leaf).reshape(batch_size, self.hidden_width)
+        gated_hidden = hidden * gating_vector
+
+        # Second layer: gated hidden to output
+        output = self.layer2(gated_hidden)
+
+        return output.view(*original_shape[:-1], self.output_width)
+
 class DSHybridMoEBlock(nn.Module):
     def __init__(self, config:DSHybridConfig):
         super().__init__()
@@ -148,7 +272,11 @@ class DSHybridMoEBlock(nn.Module):
         self.num_experts = config.num_experts
 
         self.router = BitLinear(self.hidden_dim, self.num_experts, bias=False)
-        self.experts = nn.ModuleList([DSHybridBitMLP(config) for _ in range(self.num_experts)])
+        if config.fast_feed_forward:
+            self.experts = nn.ModuleList([ModifiedFFF(config) for _ in range(self.num_experts)])
+        else:
+            self.experts = nn.ModuleList([DSHybridBitMLP(config) for _ in range(self.num_experts)])
+        
 
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
@@ -199,7 +327,12 @@ class DSHybridAttentionDecoderLayer(nn.Module):
         self.mlp_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         
         num_experts = config.layers_num_experts[layer_idx]
-        ffn_layer_class = DSHybridMoEBlock if num_experts > 1 else DSHybridBitMLP
+        if num_experts > 1:
+            ffn_layer_class = DSHybridMoEBlock
+        else if config.fast_feed_forward:
+            ffn_layer_class = ModifiedFFF
+        else:
+            ffn_layer_class = DSHybridBitMLP
         self.mlp = ffn_layer_class(config)
 
     def forward(

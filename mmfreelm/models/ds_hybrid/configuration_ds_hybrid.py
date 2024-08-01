@@ -90,6 +90,8 @@ class DSHybridConfig(PretrainedConfig):
         self,
         vocab_size=65536,
         hidden_size=4096,
+        depth=4,
+        fast_feed_forward=False,
         num_hidden_layers=32,
         num_attention_heads=32,
         num_key_value_heads=8,
@@ -129,6 +131,8 @@ class DSHybridConfig(PretrainedConfig):
     ):
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
+        self.depth = depth
+        self.fast_feed_forward = fast_feed_forward
         self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
         self.num_key_value_heads = num_key_value_heads

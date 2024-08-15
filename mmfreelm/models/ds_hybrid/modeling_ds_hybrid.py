@@ -399,7 +399,12 @@ class DSHybridBitDecoderLayer(nn.Module):
         self.mlp_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         
         num_experts = config.layers_num_experts[layer_idx]
-        ffn_layer_class = DSHybridMoEBlock if num_experts > 1 else DSHybridBitMLP
+        if num_experts > 1:
+            ffn_layer_class = DSHybridMoEBlock
+        elif config.fast_feed_forward:
+            ffn_layer_class = ModifiedFFF
+        else:
+            ffn_layer_class = DSHybridBitMLP
         self.mlp = ffn_layer_class(config)
 
     def forward(

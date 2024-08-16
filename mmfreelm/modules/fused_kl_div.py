@@ -11,7 +11,7 @@ def cross_entropy_fwd_kernel(
     labels_ptr,
     logit_scale,
     lse_square_scale,
-    ignore_index,
+    ignored_index,
     n_cols,
     n_rows,
     logits_row_stride,
@@ -35,8 +35,8 @@ def cross_entropy_fwd_kernel(
     z_loss = lse_square_scale * lse * lse
     loss += z_loss
     
-    # Check if all labels in this row are equal to ignore_index
-    is_ignored = tl.all(labels == ignore_index, 0)
+    # Check if all labels in this row are equal to ignored_index
+    is_ignored = tl.reduce_all(labels == ignored_index, 0)
     loss = tl.where(is_ignored, 0.0, loss)
     z_loss = tl.where(is_ignored, 0.0, z_loss)
     

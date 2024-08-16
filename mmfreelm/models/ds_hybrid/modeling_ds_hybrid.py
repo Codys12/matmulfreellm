@@ -778,7 +778,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
             if soft_targets is not None:
                 soft_loss = soft_loss_fct(logits[:, :-1, :].contiguous().view(-1, self.config.vocab_size), 
-                                      soft_targets[:, :-1, :].contiguous().view(-1, self.config.vocab_size))
+                                      soft_targets[:, 1:, :].contiguous().view(-1, self.config.vocab_size))
                 head_loss = soft_loss if head_loss is None else head_loss + soft_loss
 
             total_loss = head_loss if total_loss is None else total_loss + head_loss

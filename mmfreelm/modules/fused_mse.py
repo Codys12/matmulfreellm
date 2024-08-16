@@ -79,6 +79,7 @@ def cross_entropy_bwd_kernel(
 class CrossEntropyLossFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, logits, labels, logit_scale=1.0, lse_square_scale=0.0, inplace_backward=False, ignore_index=-100):
+        print(logits.shape)
         n_rows, n_cols = logits.shape
         assert labels.shape == (n_rows, n_cols)
 

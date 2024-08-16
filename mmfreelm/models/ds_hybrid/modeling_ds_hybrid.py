@@ -777,8 +777,8 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
                 head_loss = hard_loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
             if soft_targets is not None:
-                soft_targets = torch.cat((soft_targets[..., 1:, :], torch.full_like(soft_targets[..., :1, :], ignore_index)), 1)#0)), 1)#
-                soft_loss = soft_loss_fct(logits.view(-1, self.config.vocab_size), soft_targets.view(-1, self.config.vocab_size))
+                soft_loss = soft_loss_fct(logits[:, :-1, :].contiguous().view(-1, self.config.vocab_size), 
+                                      soft_targets[:, :-1, :].contiguous().view(-1, self.config.vocab_size))
                 head_loss = soft_loss if head_loss is None else head_loss + soft_loss
 
             total_loss = head_loss if total_loss is None else total_loss + head_loss

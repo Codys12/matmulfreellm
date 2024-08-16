@@ -36,7 +36,7 @@ def cross_entropy_fwd_kernel(
     loss += z_loss
     
     # Check if all labels in this row are equal to ignored_index
-    is_ignored = tl.reduce_all(labels == ignored_index, 0)
+    is_ignored = tl.sum(labels == ignore_index, 0) == n_cols
     loss = tl.where(is_ignored, 0.0, loss)
     z_loss = tl.where(is_ignored, 0.0, z_loss)
     
@@ -76,7 +76,7 @@ def cross_entropy_bwd_kernel(
     dlogits = (probs - labels) * (dloss * logit_scale)
     
     # Zero out gradients for ignored indices
-    is_ignored = tl.all(labels == ignore_index, 0)
+    is_ignored = tl.sum(labels == ignore_index, 0) == n_cols
     dlogits = tl.where(is_ignored, 0.0, dlogits)
     
     tl.store(dlogits_ptr + col_offsets, dlogits, mask=mask)

@@ -762,7 +762,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
             else:
                 hard_loss_fct = nn.CrossEntropyLoss()
 
-        soft_loss_fct = FusedSoftCrossEntropyLoss(inplace_backward=True, ignore_index=ignore_index)
+        soft_loss_fct = FusedSoftCrossEntropyLoss(inplace_backward=True)
 
         total_loss = None
         all_logits = []

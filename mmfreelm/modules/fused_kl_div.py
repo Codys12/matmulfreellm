@@ -11,7 +11,7 @@ def cross_entropy_fwd_kernel(
     labels_ptr,
     logit_scale,
     lse_square_scale,
-    ignored_index,
+    ignore_index,
     n_cols,
     n_rows,
     logits_row_stride,
@@ -35,8 +35,8 @@ def cross_entropy_fwd_kernel(
     z_loss = lse_square_scale * lse * lse
     loss += z_loss
     
-    # Check if all labels in this row are equal to ignored_index
-    is_ignored = tl.all(labels == ignored_index, 0)
+    # Check if all labels in this row are equal to ignore_index
+    is_ignored = tl.all(labels == ignore_index, 0)
     loss = tl.where(is_ignored, 0.0, loss)
     z_loss = tl.where(is_ignored, 0.0, z_loss)
     
@@ -52,7 +52,7 @@ def cross_entropy_bwd_kernel(
     labels_ptr,
     logit_scale,
     lse_square_scale,
-    ignored_index,
+    ignore_index,
     n_cols,
     logits_row_stride,
     dlogits_row_stride,
@@ -76,14 +76,14 @@ def cross_entropy_bwd_kernel(
     dlogits = (probs - labels) * (dloss * logit_scale)
     
     # Zero out gradients for ignored indices
-    is_ignored = tl.all(labels == ignored_index, 0)
+    is_ignored = tl.all(labels == ignore_index, 0)
     dlogits = tl.where(is_ignored, 0.0, dlogits)
     
     tl.store(dlogits_ptr + col_offsets, dlogits, mask=mask)
 
 class CrossEntropyLossFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, logits, labels, logit_scale=1.0, lse_square_scale=0.0, ignored_index=-100, inplace_backward=False):
+    def forward(ctx, logits, labels, logit_scale=1.0, lse_square_scale=0.0, ignore_index=-100, inplace_backward=False):
         n_rows, n_cols = logits.shape
         assert labels.shape == (n_rows, n_cols), "Labels must have the same shape as logits"
         
@@ -110,7 +110,7 @@ class CrossEntropyLossFunction(torch.autograd.Function):
             labels,
             logit_scale,
             lse_square_scale,
-            ignored_index,
+            ignore_index,
             n_cols,
             n_rows,
             logits.stride(0),
@@ -122,7 +122,7 @@ class CrossEntropyLossFunction(torch.autograd.Function):
         ctx.save_for_backward(logits, lse, labels)
         ctx.logit_scale = logit_scale
         ctx.lse_square_scale = lse_square_scale
-        ctx.ignored_index = ignored_index
+        ctx.ignore_index = ignore_index
         ctx.inplace_backward = inplace_backward
         
         return losses, z_losses
@@ -144,7 +144,7 @@ class CrossEntropyLossFunction(torch.autograd.Function):
             labels,
             ctx.logit_scale,
             ctx.lse_square_scale,
-            ctx.ignored_index,
+            ctx.ignore_index,
             n_cols,
             logits.stride(0),
             dlogits.stride(0),
@@ -159,7 +159,7 @@ def cross_entropy_loss(
     labels: torch.Tensor,
     logit_scale: float = 1.0,
     lse_square_scale: float = 0.0,
-    ignored_index: int = -100,
+    ignore_index: int = -100,
     inplace_backward: bool = False,
 ) -> torch.Tensor:
     return CrossEntropyLossFunction.apply(
@@ -167,7 +167,7 @@ def cross_entropy_loss(
         labels,
         logit_scale,
         lse_square_scale,
-        ignored_index,
+        ignore_index,
         inplace_backward,
     )
 
@@ -177,7 +177,7 @@ class FusedSoftCrossEntropyLoss(torch.nn.Module):
         reduction="mean",
         logit_scale=1.0,
         lse_square_scale=0.0,
-        ignored_index=-100,
+        ignore_index=-100,
         inplace_backward=False,
         return_z_loss=False,
     ):
@@ -185,7 +185,7 @@ class FusedSoftCrossEntropyLoss(torch.nn.Module):
         self.reduction = reduction
         self.logit_scale = logit_scale
         self.lse_square_scale = lse_square_scale
-        self.ignored_index = ignored_index
+        self.ignore_index = ignore_index
         self.inplace_backward = inplace_backward
         self.return_z_loss = return_z_loss
 
@@ -195,12 +195,12 @@ class FusedSoftCrossEntropyLoss(torch.nn.Module):
             target,
             logit_scale=self.logit_scale,
             lse_square_scale=self.lse_square_scale,
-            ignored_index=self.ignored_index,
+            ignore_index=self.ignore_index,
             inplace_backward=self.inplace_backward,
         )
         
         if self.reduction == "mean":
-            valid_elements = (target != self.ignored_index).any(dim=1).sum()
+            valid_elements = (target != self.ignore_index).any(dim=1).sum()
             loss = loss.sum() / valid_elements
             z_loss = z_loss.sum() / valid_elements
         elif self.reduction == "sum":

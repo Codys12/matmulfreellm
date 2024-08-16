@@ -754,14 +754,15 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
         hidden_states = outputs[0]
 
+        ignore_index = -100
         # Prepare loss functions
         if labels is not None:
             if self.config.fuse_cross_entropy:
-                hard_loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
+                hard_loss_fct = FusedCrossEntropyLoss(inplace_backward=True, ignore_index=ignore_index)
             else:
                 hard_loss_fct = nn.CrossEntropyLoss()
 
-        soft_loss_fct = FusedSoftCrossEntropyLoss(inplace_backward=True)
+        soft_loss_fct = FusedSoftCrossEntropyLoss(inplace_backward=True, ignore_index=ignore_index)
 
         total_loss = None
         all_logits = []
@@ -776,7 +777,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
                 head_loss = hard_loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
             if soft_targets is not None:
-                soft_targets = torch.cat((soft_targets[..., 1:, :], torch.full_like(soft_targets[..., :1, :], soft_loss_fct.ignore_index)), 1)#0)), 1)#
+                soft_targets = torch.cat((soft_targets[..., 1:, :], torch.full_like(soft_targets[..., :1, :], ignore_index)), 1)#0)), 1)#
                 soft_loss = soft_loss_fct(logits.view(-1, self.config.vocab_size), soft_targets.view(-1, self.config.vocab_size))
                 head_loss = soft_loss if head_loss is None else head_loss + soft_loss
 

@@ -169,6 +169,7 @@ class FusedSoftCrossEntropyLoss(nn.Module):
         lse_square_scale=0.0,
         inplace_backward=False,
         return_z_loss=False,
+        ignore_index=-100,
     ):
         super().__init__()
         if reduction not in ["mean", "none", "sum"]:
@@ -178,6 +179,7 @@ class FusedSoftCrossEntropyLoss(nn.Module):
         self.lse_square_scale = lse_square_scale
         self.inplace_backward = inplace_backward
         self.return_z_loss = return_z_loss
+        self.ignore_index = ignore_index
 
     def forward(self, input, target):
         assert input.is_cuda and target.is_cuda, "Only support CUDA tensors"
@@ -187,10 +189,11 @@ class FusedSoftCrossEntropyLoss(nn.Module):
             logit_scale=self.logit_scale,
             lse_square_scale=self.lse_square_scale,
             inplace_backward=self.inplace_backward,
+            ignored_index=self.ignore_index,
         )
         if self.reduction == "mean":
-            loss = loss.mean()
-            z_loss = z_loss.mean()
+            loss = loss.sum() / (target != self.ignore_index).sum()
+            z_loss = z_loss.sum() / (target != self.ignore_index).sum()
         elif self.reduction == "sum":
             loss = loss.sum()
             z_loss = z_loss.sum()

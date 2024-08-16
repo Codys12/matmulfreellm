@@ -1,149 +1,198 @@
 import torch
+import torch.nn as nn
 import triton
 import triton.language as tl
 
 @triton.jit
-def mse_loss_fwd_kernel(
+def cross_entropy_fwd_kernel(
     loss_ptr,
-    pred_ptr,
-    target_ptr,
-    batch_size,
-    seq_len,
-    topk,
-    pred_stride_batch,
-    pred_stride_seq,
-    target_stride_batch,
-    target_stride_seq,
+    lse_ptr,
+    z_loss_ptr,
+    logits_ptr,
+    labels_ptr,
+    logit_scale,
+    lse_square_scale,
+    n_cols,
+    n_rows,
+    logits_row_stride,
+    labels_row_stride,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
-    batch_idx = pid // seq_len
-    seq_idx = pid % seq_len
-
-    loss = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)
-    for k in range(0, topk, BLOCK_SIZE):
-        k_idx = tl.arange(0, BLOCK_SIZE) + k
-        mask = k_idx < topk
-
-        pred_offset = (
-            batch_idx * pred_stride_batch
-            + seq_idx * pred_stride_seq
-            + k_idx
-        )
-        target_offset = (
-            batch_idx * target_stride_batch
-            + seq_idx * target_stride_seq
-            + k_idx
-        )
-
-        pred = tl.load(pred_ptr + pred_offset, mask=mask, other=0.0)
-        target = tl.load(target_ptr + target_offset, mask=mask, other=0.0)
-
-        diff = pred - target
-        loss += tl.where(mask, diff * diff, 0.0)
-
-    loss = tl.sum(loss) / topk
-    tl.store(loss_ptr + pid, loss)
+    row_idx = tl.program_id(0)
+    col_block_idx = tl.program_id(1)
+    logits_ptr = logits_ptr + row_idx * logits_row_stride
+    labels_ptr = labels_ptr + row_idx * labels_row_stride
+    col_offsets = col_block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    logits = tl.load(logits_ptr + col_offsets, mask=col_offsets < n_cols, other=-float("inf")).to(tl.float32) * logit_scale
+    labels = tl.load(labels_ptr + col_offsets, mask=col_offsets < n_cols, other=0.0).to(tl.float32)
+    max_logits = tl.max(logits, 0)
+    lse = tl.log(tl.sum(tl.exp(logits - max_logits), 0)) + max_logits
+    tl.store(lse_ptr + col_block_idx * n_rows + row_idx, lse)
+    loss = tl.sum(labels * (lse - logits), 0)
+    z_loss = lse_square_scale * lse * lse
+    loss += z_loss
+    tl.store(loss_ptr + col_block_idx * n_rows + row_idx, loss)
+    tl.store(z_loss_ptr + col_block_idx * n_rows + row_idx, z_loss)
 
 @triton.jit
-def mse_loss_bwd_kernel(
-    grad_pred_ptr,
-    grad_loss_ptr,
-    pred_ptr,
-    target_ptr,
-    batch_size,
-    seq_len,
-    topk,
-    pred_stride_batch,
-    pred_stride_seq,
-    target_stride_batch,
-    target_stride_seq,
+def cross_entropy_bwd_kernel(
+    dlogits_ptr,
+    dloss_ptr,
+    logits_ptr,
+    lse_ptr,
+    labels_ptr,
+    logit_scale,
+    lse_square_scale,
+    n_cols,
+    logits_row_stride,
+    dlogits_row_stride,
+    labels_row_stride,
+    dloss_row_stride,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
-    batch_idx = pid // seq_len
-    seq_idx = pid % seq_len
+    row_idx = tl.program_id(0)
+    col_block_idx = tl.program_id(1)
+    logits_ptr = logits_ptr + row_idx * logits_row_stride
+    dlogits_ptr = dlogits_ptr + row_idx * dlogits_row_stride
+    labels_ptr = labels_ptr + row_idx * labels_row_stride
+    col_offsets = col_block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    dloss = tl.load(dloss_ptr + row_idx * dloss_row_stride)
+    logits = tl.load(logits_ptr + col_offsets, mask=col_offsets < n_cols, other=-float("inf")).to(tl.float32) * logit_scale
+    labels = tl.load(labels_ptr + col_offsets, mask=col_offsets < n_cols, other=0.0).to(tl.float32)
+    lse = tl.load(lse_ptr + row_idx)
+    probs = tl.exp(logits - lse)
+    probs += 2.0 * lse_square_scale * lse * probs
+    dlogits = (probs - labels) * dloss * logit_scale
+    tl.store(dlogits_ptr + col_offsets, dlogits, mask=col_offsets < n_cols)
 
-    grad_loss = tl.load(grad_loss_ptr + pid)
-
-    for k in range(0, topk, BLOCK_SIZE):
-        k_idx = tl.arange(0, BLOCK_SIZE) + k
-        mask = k_idx < topk
-
-        pred_offset = (
-            batch_idx * pred_stride_batch
-            + seq_idx * pred_stride_seq
-            + k_idx
-        )
-        target_offset = (
-            batch_idx * target_stride_batch
-            + seq_idx * target_stride_seq
-            + k_idx
-        )
-
-        pred = tl.load(pred_ptr + pred_offset, mask=mask, other=0.0)
-        target = tl.load(target_ptr + target_offset, mask=mask, other=0.0)
-
-        diff = pred - target
-        grad = 2 * diff * grad_loss / topk
-        tl.store(grad_pred_ptr + pred_offset, grad, mask=mask)
-
-class FusedMSELoss(torch.autograd.Function):
+class CrossEntropyLossFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, pred, target):
-        batch_size, seq_len, topk = pred.shape
-        loss = torch.empty(batch_size * seq_len, device=pred.device, dtype=torch.float32)
+    def forward(ctx, logits, labels, logit_scale=1.0, lse_square_scale=0.0, inplace_backward=False):
+        n_rows, n_cols = logits.shape
+        assert labels.shape == (n_rows, n_cols)
 
-        BLOCK_SIZE = triton.next_power_of_2(min(topk, 1024))
-        grid = (batch_size * seq_len,)
+        if logits.stride(-1) != 1:
+            logits = logits.contiguous()
+        if labels.stride(-1) != 1:
+            labels = labels.contiguous()
 
-        mse_loss_fwd_kernel[grid](
-            loss,
-            pred,
-            target,
-            batch_size,
-            seq_len,
-            topk,
-            pred.stride(0),
-            pred.stride(1),
-            target.stride(0),
-            target.stride(1),
-            BLOCK_SIZE=BLOCK_SIZE,
-        )
+        MAX_BLOCK_SIZE = 64 * 1024
+        BLOCK_SIZE = min(triton.next_power_of_2(n_cols), MAX_BLOCK_SIZE)
+        num_warps = 4 if BLOCK_SIZE < 2048 else (8 if BLOCK_SIZE < 8192 else (16 if BLOCK_SIZE < 128 * 1024 else 32))
+        n_splits = (n_cols + BLOCK_SIZE - 1) // BLOCK_SIZE
+        loss_shape = (n_splits, n_rows) if n_splits > 1 else (n_rows,)
+        losses = torch.empty(*loss_shape, dtype=torch.float, device=logits.device)
+        lse = torch.empty(*loss_shape, dtype=torch.float, device=logits.device)
+        z_losses = torch.empty(*loss_shape, dtype=torch.float, device=logits.device)
 
-        ctx.save_for_backward(pred, target)
-        ctx.batch_size = batch_size
-        ctx.seq_len = seq_len
-        ctx.topk = topk
+        with torch.cuda.device(logits.device.index):
+            cross_entropy_fwd_kernel[(n_rows, n_splits)](
+                losses,
+                lse,
+                z_losses,
+                logits,
+                labels,
+                logit_scale,
+                lse_square_scale,
+                n_cols,
+                n_rows,
+                logits.stride(0),
+                labels.stride(0),
+                BLOCK_SIZE=BLOCK_SIZE,
+                num_warps=num_warps,
+            )
 
-        return loss.view(batch_size, seq_len)
+        if n_splits > 1:
+            losses = losses.sum(dim=0)
+            z_losses = z_losses.sum(dim=0)
+
+        ctx.save_for_backward(logits, lse, labels)
+        ctx.mark_non_differentiable(z_losses)
+        ctx.logit_scale = logit_scale
+        ctx.lse_square_scale = lse_square_scale
+        ctx.inplace_backward = inplace_backward
+
+        return losses, z_losses
 
     @staticmethod
-    def backward(ctx, grad_output):
-        pred, target = ctx.saved_tensors
-        batch_size, seq_len, topk = ctx.batch_size, ctx.seq_len, ctx.topk
+    def backward(ctx, grad_losses, grad_z_losses):
+        del grad_z_losses  # z_losses are only for logging.
 
-        grad_pred = torch.empty_like(pred)
-        BLOCK_SIZE = triton.next_power_of_2(min(topk, 1024))
-        grid = (batch_size * seq_len,)
+        logits, lse, labels = ctx.saved_tensors
+        dlogits = logits if ctx.inplace_backward else torch.empty_like(logits)
+        n_rows, n_cols = logits.shape
+        BLOCK_SIZE = min(triton.next_power_of_2(n_cols), 4 * 1024)
+        num_warps = 4 if BLOCK_SIZE < 2048 else (8 if BLOCK_SIZE < 8192 else 16)
+        def grid(META): return (n_rows, triton.cdiv(n_cols, META["BLOCK_SIZE"]))
 
-        mse_loss_bwd_kernel[grid](
-            grad_pred,
-            grad_output.flatten(),
-            pred,
+        with torch.cuda.device(logits.device.index):
+            cross_entropy_bwd_kernel[grid](
+                dlogits,
+                grad_losses,
+                logits,
+                lse,
+                labels,
+                ctx.logit_scale,
+                ctx.lse_square_scale,
+                n_cols,
+                logits.stride(0),
+                dlogits.stride(0),
+                labels.stride(0),
+                grad_losses.stride(0),
+                BLOCK_SIZE=BLOCK_SIZE,
+                num_warps=num_warps,
+            )
+        return dlogits, None, None, None, None
+
+def cross_entropy_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    logit_scale: float = 1.0,
+    lse_square_scale: float = 0.0,
+    inplace_backward: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    return CrossEntropyLossFunction.apply(
+        logits,
+        labels,
+        logit_scale,
+        lse_square_scale,
+        inplace_backward,
+    )
+
+class FusedSoftCrossEntropyLoss(nn.Module):
+    def __init__(
+        self,
+        reduction="mean",
+        logit_scale=1.0,
+        lse_square_scale=0.0,
+        inplace_backward=False,
+        return_z_loss=False,
+    ):
+        super().__init__()
+        if reduction not in ["mean", "none", "sum"]:
+            raise NotImplementedError("Only support reduction = 'mean' or 'none' or 'sum'")
+        self.reduction = reduction
+        self.logit_scale = logit_scale
+        self.lse_square_scale = lse_square_scale
+        self.inplace_backward = inplace_backward
+        self.return_z_loss = return_z_loss
+
+    def forward(self, input, target):
+        assert input.is_cuda and target.is_cuda, "Only support CUDA tensors"
+        loss, z_loss = cross_entropy_loss(
+            input,
             target,
-            batch_size,
-            seq_len,
-            topk,
-            pred.stride(0),
-            pred.stride(1),
-            target.stride(0),
-            target.stride(1),
-            BLOCK_SIZE=BLOCK_SIZE,
+            logit_scale=self.logit_scale,
+            lse_square_scale=self.lse_square_scale,
+            inplace_backward=self.inplace_backward,
         )
+        if self.reduction == "mean":
+            loss = loss.mean()
+            z_loss = z_loss.mean()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+            z_loss = z_loss.sum()
 
-        return grad_pred, None
-
-class MSELoss(torch.nn.Module):
-    def forward(self, pred, target):
-        return FusedMSELoss.apply(pred, target)
+        if not self.return_z_loss:
+            return loss
+        return loss, z_loss

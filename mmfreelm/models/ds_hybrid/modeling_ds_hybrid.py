@@ -19,7 +19,7 @@ from mmfreelm.models.ds_hybrid.modeling_outputs import (
 from mmfreelm.layers.hgrn_bit import HGRNBitAttention
 from mmfreelm.models.ds_hybrid.configuration_ds_hybrid import DSHybridConfig
 from mmfreelm.models.utils import RecurrentCache
-from mmfreelm.modules import FusedCrossEntropyLoss, RMSNorm
+from mmfreelm.modules import FusedCrossEntropyLoss, FusedSoftCrossEntropyLoss, RMSNorm
 from mmfreelm.modules.layernorm import RMSNormLinear
 from mmfreelm.modules.activations import swiglu_linear, swiglu
 #from mmfreelm.ops.bitnet import BitLinear_Fuse as BitLinear
@@ -761,6 +761,8 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
             else:
                 hard_loss_fct = nn.CrossEntropyLoss()
 
+        soft_loss_fct = FusedSoftCrossEntropyLoss(inplace_backward=True)
+
         total_loss = None
         all_logits = []
 
@@ -775,7 +777,7 @@ class DSHybridForCausalLM(DSHybridBitPreTrainedModel):
 
             if soft_targets is not None:
                 soft_targets = torch.cat((soft_targets[..., 1:, :], torch.full_like(soft_targets[..., :1, :], loss_fct.ignore_index)), 1)
-                soft_loss = distillation_loss(logits, soft_targets)
+                soft_loss = soft_loss_func(logits, soft_targets)
                 head_loss = soft_loss if head_loss is None else head_loss + soft_loss
 
             total_loss = head_loss if total_loss is None else total_loss + head_loss

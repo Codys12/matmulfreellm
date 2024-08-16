@@ -153,6 +153,8 @@ class CrossEntropyLossFunction(torch.autograd.Function):
         inplace_backward=False,
         process_group=None,
     ):
+        print(logits.shape)
+        print(labels.shape)
         n_rows, n_cols = logits.shape
         assert labels.shape == (n_rows,)
         world_size = 1 if process_group is None else torch.distributed.get_world_size(process_group)
